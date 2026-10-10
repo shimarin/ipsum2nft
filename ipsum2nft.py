@@ -691,7 +691,7 @@ NFULA_CFG_MODE = 2
 
 NFULNL_COPY_PACKET = 2
 
-# packet attributes
+# packet attributes (values per <linux/netfilter/nfnetlink_log.h>)
 NFULA_PACKET_HDR = 1
 NFULA_MARK = 2
 NFULA_TIMESTAMP = 3
@@ -699,7 +699,15 @@ NFULA_IFINDEX_INDEV = 4
 NFULA_HWADDR = 8
 NFULA_PAYLOAD = 9
 NFULA_PREFIX = 10
+NFULA_UID = 11     # user id of the socket (fsuid, munged to our ns; __be32)
+NFULA_GID = 14     # group id of the socket (fsgid, munged to our ns; __be32)
 NFULA_HWHEADER = 16
+
+# The kernel attaches NFULA_UID/NFULA_GID to an NFLOG message whenever the
+# packet has a related local socket - no nft rule option is needed (and an
+# NFLOG rule cannot take 'flags skuid' anyway; that flag belongs to the
+# kernel-log backend only). Forwarded packets have no local socket, so
+# hits from the 'ipsum-fwd: ' direction carry no UID/GID.
 
 AF_INET = socket.AF_INET
 AF_INET6 = socket.AF_INET6
@@ -755,7 +763,8 @@ def parse_nlas(data):
 class Event:
     __slots__ = ("ts", "family", "proto", "proto_num", "src_ip", "dst_ip",
                  "src_port", "dst_port", "icmp_type", "icmp_code",
-                 "src_mac", "dst_mac", "indev", "prefix", "mark", "hook")
+                 "src_mac", "dst_mac", "indev", "prefix", "mark", "hook",
+                 "uid", "gid")
 
     def __init__(self):
         self.ts = time.time()
@@ -774,6 +783,8 @@ class Event:
         self.prefix = ""
         self.mark = 0
         self.hook = None
+        self.uid = None
+        self.gid = None
 
     def dst_label(self):
         if self.dst_port is not None:
@@ -937,6 +948,10 @@ class NflogReader:
             ev.mark = struct.unpack(">I", attrs[NFULA_MARK][:4])[0]
         if NFULA_IFINDEX_INDEV in attrs:
             ev.indev = struct.unpack(">I", attrs[NFULA_IFINDEX_INDEV][:4])[0]
+        if NFULA_UID in attrs:
+            ev.uid = struct.unpack(">I", attrs[NFULA_UID][:4])[0]
+        if NFULA_GID in attrs:
+            ev.gid = struct.unpack(">I", attrs[NFULA_GID][:4])[0]
         if NFULA_PREFIX in attrs:
             ev.prefix = attrs[NFULA_PREFIX].split(b"\x00", 1)[0].decode("ascii", "replace")
 
@@ -1027,9 +1042,12 @@ class Alerter:
         self._deferred_overflow = 0  # overflow of failed sends, carried until a
                                      # successful notification reports it
         self._nkeys = 0        # keys stored in stats + deferred (shared budget)
+        self._uids = {}        # src_ip -> set of observed uids (display only)
         self.last_alert = {}   # src_ip -> monotonic time (cooldown management)
 
     def add(self, ev):
+        if ev.uid is not None:
+            self._uids.setdefault(ev.src_ip, set()).add(ev.uid)
         # an already-stored key (in the current window OR in the deferred
         # retry set) just updates its count; only a genuinely new pair
         # competes for the shared key budget
@@ -1118,6 +1136,8 @@ class Alerter:
                 to_report[src] = per
             else:
                 sup_n += self._src_n(per)
+        uids = self._uids
+        self._uids = {}
         if not to_report:
             # everything is in cooldown: nothing to send, but the overflow
             # count is kept for the next successful notification
@@ -1128,22 +1148,27 @@ class Alerter:
                           "(cap) - no notification", sup_n, overflow)
             return True
 
-        ok = self._notify(to_report, sup_n, self._total_n(to_report), overflow)
+        rep_uids = {s: u for s, u in uids.items() if s in to_report}
+        ok = self._notify(to_report, sup_n, self._total_n(to_report), overflow,
+                          rep_uids)
         if not ok:
             # kept for retry at the next flush (natural backoff: one
-            # window); the omitted-count travels with the deferred stats so
-            # a later successful report still discloses it
+            # window); the omitted-count and the observed uids travel with
+            # the deferred stats so a later successful report still
+            # discloses them
             self.deferred = to_report
             self._deferred_overflow = overflow
             self._nkeys = sum(len(per) for per in to_report.values())
+            self._uids = rep_uids
         else:
             self._nkeys = 0
         return ok
 
-    def _notify(self, to_report, suppressed_n, total_events, overflow):
+    def _notify(self, to_report, suppressed_n, total_events, overflow, uids):
         subject = "%s %s: contact with a blocklisted IP - sources: %d" % (
             self.cfg.subject_prefix, self.cfg.hostname, len(to_report))
-        body = self._build_body(to_report, suppressed_n, total_events, overflow)
+        body = self._build_body(to_report, suppressed_n, total_events, overflow,
+                                uids)
         if self.cfg.dump:
             print("---- (dump) %s ----\n%s" % (subject, body))
             sent = True
@@ -1161,7 +1186,7 @@ class Alerter:
                 self.last_alert[src] = time.monotonic()
         return sent
 
-    def _build_body(self, to_report, suppressed_n, total_events, overflow):
+    def _build_body(self, to_report, suppressed_n, total_events, overflow, uids):
         lines = []
         lines.append("Host %s: contact with an IP on the IPsum blocklist was detected." % self.cfg.hostname)
         lines.append("Aggregation window: %d sec / Cooldown: %d sec" % (self.cfg.window, self.cfg.cooldown))
@@ -1171,6 +1196,8 @@ class Alerter:
         if overflow:
             lines.append("(another %d event(s) omitted: aggregation cap exceeded)" % overflow)
         lines.append("(direction: prefix 'ipsum-out: ' = this host itself, 'ipsum-fwd: ' = an internal host, via forward)")
+        lines.append("(uid = the local user whose socket made the contact; output only -")
+        lines.append("forwarded packets have no local socket and setuid binaries show the fsuid)")
         lines.append("")
 
         for src in sorted(to_report):
@@ -1178,8 +1205,11 @@ class Alerter:
             samples = [a["ev"] for a in agg.values()]
             src_mac = next((e.src_mac for e in samples if e.src_mac != "-"), "-")
             devs = sorted({str(e.indev) for e in samples if e.indev})
-            lines.append("■ Source %s  (MAC %s%s)" % (
-                src, src_mac, "  IF#" + ",".join(devs) if devs else ""))
+            uidstr = ""
+            if uids.get(src):
+                uidstr = "uid %s  " % ",".join(str(u) for u in sorted(uids[src]))
+            lines.append("■ Source %s  (%sMAC %s%s)" % (
+                src, uidstr, src_mac, "  IF#" + ",".join(devs) if devs else ""))
 
             lines.append("   %-19s %-8s %-42s %6s  %s" %
                          ("last time", "proto", "dst (blocklisted)", "count", "prefix/mark"))

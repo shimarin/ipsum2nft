@@ -29,7 +29,7 @@ HTTPSでダウンロード（git依存なし、約1.9MB）し、`nft -f` でロ�
 | `--min-score N` | 掲載ブラックリスト数が N 以上のIPのみ採用（既定: 1 = 全件）。`levels/N.txt` と同等の絞り込み |
 | `--add IP` | 追加でセットに含めるIP/CIDR（繰り返し指定・カンマ区切り可）。`--min-score`の対象外。`--merge`併用時は隣接エントリと統合される。実測で特定のIPのブロックを確認したい場合に便利 |
 | `--log` | アウトバウンドヒット（output daddr / forward daddr）をレート制限付きでカーネルログ(journald)に記録 |
-| `--log-group N` | 同アウトバウンドヒットをNFLOGグループNに送出（同梱の `daemon` サブコマンド、または lateral-hoihoi 等のユーザースペースリーダーでMAC付き記録＋メール警報。負荷時の完全記録は保証しない） |
+| `--log-group N` | 同アウトバウンドヒットをNFLOGグループNに送出（同梱の `daemon` サブコマンド、または lateral-hoihoi 等のユーザースペースリーダーでMAC/uid付き記録＋メール警報。負荷時の完全記録は保証しない） |
 | `--log-rate RATE` | `--log` のレート制限（既定 `10/minute`）。`N/second\|minute\|hour\|day\|week` の正の整数 N を要求し正規化する（nft は `sec` の短縮形や単位なしを拒否し、先頭ゼロは8進数と解釈するため `010/minute` は `10/minute` に正規化される） |
 | `--merge` | 隣接・重複するprefixを統合（256個の/32 → /24 等）。本リストは118,773 → 約90,000件に圧縮 |
 | `--chains {both,all,input,output,forward,none}` | 生成するドロップチェーン（既定: both = input+output）。ルーターでは `all`（+forward）。`none` でセットのみ |
@@ -178,6 +178,17 @@ journalctl -u ipsum2nft-notify
 
 - root 実行（NFLOG グループの bind に CAP_NET_ADMIN が必要）。
   unit には `CapabilityBoundingSet=CAP_NET_ADMIN` 等の追加ハードニング付き。
+- 通知内容: 時刻 / src・dst IP / プロトコル / ポート(やICMP type) / **src MAC** /
+  受信IF / prefix / 方向 / 件数、および **output ヒットのみ** 接触したローカル
+  ユーザーの **uid**（ソースごとの観測 uid の集合、例 `uid 0,1000`）。
+  カーネルはパケットにソケットが関連している限り NFLOG メッセージに
+  UID/GID（`NFULA_UID`/`NFULA_GID`、fsuid/fsgid）を自動付与するため
+  nft ルールの設定は不要（NFLOG ルールに `flags skuid` は付けられない。
+  それはカーネルログバックエンド専用で、`--log` 時の OUTPUT ルールに
+  付けているのはこのため）。forward ヒット（`ipsum-fwd: `）はローカル
+  ソケットが無いため uid 付きにならない。setuid バイナリは setuid 後の値
+  （fsuid）となり、値はリーダー（デーモン）の user namespace 基準で
+  munge されたもの。ソケットを持たないパケット（カーネル由来等）は uid なし。
 - bind なしで `--log-group` を付けていても drop 自体には影響しない（カーネルが
   ログをスキップするだけ）。ただし前提が2つある: 同じネットワーク名前空間で
   他に group 6 を使っていないこと（別用途のリーダーが起きているとそのリーダーに
