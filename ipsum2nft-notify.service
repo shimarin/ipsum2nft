@@ -1,0 +1,37 @@
+[Unit]
+Description=ipsum2nft blocklist-hit notification daemon (NFLOG group 6 -> mail)
+# Only needed when ipsum2nft.service runs with --log-group; the group number
+# in /etc/ipsum2nft.conf ([nflog] group) must match it.
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ipsum2nft daemon --config /etc/ipsum2nft.conf
+Restart=on-failure
+RestartSec=5
+
+# --- privileges ---
+# Binding an NFLOG group requires CAP_NET_ADMIN, so run as root by default
+# (also keeps the SMTP password in a root:root 0600 config file).
+
+NoNewPrivileges=true
+# The only capability the daemon needs (netlink NFLOG bind); everything
+# else is dropped from the bounding set.
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# --- hardening ---
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_NETLINK AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

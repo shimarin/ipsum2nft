@@ -29,7 +29,7 @@ HTTPSでダウンロード（git依存なし、約1.9MB）し、`nft -f` でロ�
 | `--min-score N` | 掲載ブラックリスト数が N 以上のIPのみ採用（既定: 1 = 全件）。`levels/N.txt` と同等の絞り込み |
 | `--add IP` | 追加でセットに含めるIP/CIDR（繰り返し指定・カンマ区切り可）。`--min-score`の対象外。`--merge`併用時は隣接エントリと統合される。実測で特定のIPのブロックを確認したい場合に便利 |
 | `--log` | アウトバウンドヒット（output daddr / forward daddr）をレート制限付きでカーネルログ(journald)に記録 |
-| `--log-group N` | 同アウトバウンドヒットをNFLOGグループNに送出（lateral-hoihoi等のユーザースペースリーダーでMAC付き完全記録＋メール警報） |
+| `--log-group N` | 同アウトバウンドヒットをNFLOGグループNに送出（同梱の `daemon` サブコマンド、または lateral-hoihoi 等のユーザースペースリーダーでMAC付き記録＋メール警報。負荷時の完全記録は保証しない） |
 | `--log-rate RATE` | `--log` のレート制限（既定 `10/minute`）。`N/second\|minute\|hour\|day\|week` の正の整数 N を要求し正規化する（nft は `sec` の短縮形や単位なしを拒否し、先頭ゼロは8進数と解釈するため `010/minute` は `10/minute` に正規化される） |
 | `--merge` | 隣接・重複するprefixを統合（256個の/32 → /24 等）。本リストは118,773 → 約90,000件に圧縮 |
 | `--chains {both,all,input,output,forward,none}` | 生成するドロップチェーン（既定: both = input+output）。ルーターでは `all`（+forward）。`none` でセットのみ |
@@ -98,8 +98,8 @@ ip daddr @blocklist counter drop
 ip daddr @blocklist limit rate 10/minute counter log prefix "ipsum-fwd: " drop
 ip daddr @blocklist counter drop
 
-# --log-group 5 の場合（NFLOG 1ルール、無条件drop）
-ip daddr @blocklist counter log group 5 prefix "ipsum-fwd: " snaplen 128 drop
+# --log-group 6 の場合（NFLOG 1ルール、無条件drop）
+ip daddr @blocklist counter log group 6 prefix "ipsum-fwd: " snaplen 128 drop
 ```
 
 - `--log`（軽量）: カーネルリングバッファ/journald へ。
@@ -109,12 +109,12 @@ ip daddr @blocklist counter log group 5 prefix "ipsum-fwd: " snaplen 128 drop
   前提: カーネルの syslog ロガーが有効であること（`nf_log_syslog` モジュール、
   Gentoo では netfilter 有効なら同梱）。確認: `cat /proc/sys/net/netfilter/nf_log/2`
   が `nf_log_ipv4` を指していれば OK。行が出ない場合の第一候補はこれ。
-- `--log-group N`（[lateral-hoihoi](https://github.com/shimarin/lateral-hoihoi) 連携）: NFLOG 経由でユーザースペース
-  リーダーにパケットごと渡す。lateral-hoihoi デーモンはそのまま使える（group 番号を conf
-  に合わせるだけ。検出名義はラテラルムーヴメントだが NFLOG 到着イベント自体は汎用的）。
-  記録内容: 時刻 / src・dst IP / **src・dst MAC** / プロトコル / ポート(やICMP type) /
+- `--log-group N`（NFLOG → ユーザースペースリーダー）: NFLOG 経由でパケットごと
+  渡す。記録内容: 時刻 / src・dst IP / **src・dst MAC** / プロトコル / ポート(やICMP type) /
   受信IF / prefix（`ipsum-out: ` か `ipsum-fwd: ` で方向が識別できる）。
-  集約ウィンドウ＋送信元別 cooldown 付きでメール警報。
+  同梱の通知デーモン（[`ipsum2nft daemon`](#通知デーモンipsum2nft-daemon)）がそのまま使えるほか、
+  [lateral-hoihoi](https://github.com/shimarin/lateral-hoihoi) デーモンもそのまま使える（group 番号を conf
+  に合わせるだけ。検出名義はラテラルムーヴメントだが NFLOG 到着イベント自体は汎用的）。
   sandbox実測例（内部ホスト 10.99.1.2 がブロック済みIPへ ping したケース）:
 
   ```
@@ -125,6 +125,88 @@ ip daddr @blocklist counter log group 5 prefix "ipsum-fwd: " snaplen 128 drop
   注意: NFLOG グループは同時期に1つのリーダーしか bind できない。同じルーターで
   lateral-hoihoi 本来の罠検出も動かす場合は group 番号を分け、リーダーも2つ立てること
   （またはグループを統一して1つのリーダーに集約する）。
+
+### 通知デーモン（`ipsum2nft daemon`）
+
+`--log-group` で NFLOG に送ったヒットを読み取り、メールで通知する自前の通知デーモン。
+lateral-hoihoi と同じ NFLOG 読み取り機構を同梱しているため、ipsum2nft 単体で完結する。
+
+```sh
+ipsum2nft daemon                    # /etc/ipsum2nft.conf で起動
+ipsum2nft daemon --dump             # 動作確認: メールを送らず標準出力に表示
+ipsum2nft daemon --test-mail        # 設定でテストメールを1通送って終了
+```
+
+設定ファイルは `/etc/ipsum2nft.conf`（例は `ipsum2nft.conf.example`。SMTP パスワードを
+含むので root:root 0600 を推奨）。**`[nflog] group` は `--install` 時の `--log-group N`
+と一致させること**（同梱の `ipsum2nft.service` は 6 を使う）:
+
+```ini
+[nflog]
+group = 6
+
+[detection]
+# この秒数ぶんを1通に集約(メール洪水対策)
+aggregation_window = 60
+# 同一送信元の再通知抑制(長時間スキャン対策)
+cooldown = 3600
+
+[smtp]
+host = smtp.example.com
+port = 587
+tls = starttls
+user = alerts@example.com
+password = ...
+# 自前CAを使う場合は証明書ファイル/ディレクトリを指定(TLS検証は既定で有効)
+# cafile = /etc/pki/my-ca.pem
+# capath = /etc/pki/ca
+timeout = 30
+
+[mail]
+subject_prefix = [ipsum2nft]
+hostname = auto
+from = ipsum2nft@example.com
+to = soc@example.com
+```
+
+systemd での運用（`--log-group` を使う場合のみ）:
+
+```sh
+systemctl enable --now ipsum2nft-notify.service
+journalctl -u ipsum2nft-notify
+```
+
+- root 実行（NFLOG グループの bind に CAP_NET_ADMIN が必要）。
+  unit には `CapabilityBoundingSet=CAP_NET_ADMIN` 等の追加ハードニング付き。
+- bind なしで `--log-group` を付けていても drop 自体には影響しない（カーネルが
+  ログをスキップするだけ）。ただし前提が2つある: 同じネットワーク名前空間で
+  他に group 6 を使っていないこと（別用途のリーダーが起きているとそのリーダーに
+  イベントが流れる）、カーネルの NFLOG 対応（nfnetlink_log）が利用可能であること。
+- デーモン停止中はヒットは通知されない（NFLOG にバッファリングは無いため）。
+- 起動時は config の ACK を**期限付きで待ってから**受信開始する（この間に届いた
+  パケットは保持して最初のリードで返す）。権限不足やグループが別プロセスに bind
+  されている場合は起動を中止し非零終了（`Restart=on-failure` が効く）。
+- ヒットは (送信元, 集約キー) 単位で**増分集約**されるため、メモリとメールサイズは
+  パケット数に比例しない（ウィンドウあたり 4096 ペアまで集約し、超過分は件数だけ
+  メールに計上）。集約ペア数の上限は現ウィンドウと**再送待ち分（SMTP 失敗で保持中）
+  を合わせた合計1つ**であり、SMTP 障害が長く続いても保持量は増えない（既存キーの
+  件数更新は継続し、入らない新規キー分を省略件数に計上する）。SMTP 送信失敗時は
+  cooldown を適用せず保持し、次のウィンドウで再試行する（省略件数も一緒に保持し、
+  成功した通知で計上される）。
+- **負荷時の完全記録は保証しない**: NFLOG ルールにはレート制限が無い（制限超過の
+  トラフィックを通過させないため）ため、高レートなヒットではカーネル側の
+  netlink コピー/転送負荷やバッファオーバーフロー（ENOBUFS）による取りこぼしが
+  起こり得る。ユーザースペースの集約上限はメモリを守るだけで、このカーネル側
+  経路を保護するものではない。`limit ... log ... drop`＋無条件 `drop` の
+  2ルール方式（`--log` と同型）でカーネル側も制限できるオプションは次の増分で
+  検討予定。導入時は、グローバルな limit では1つの送信元が枠を使い切って他送信元
+  の通知を失い得る点に注意が必要。
+- TLS は既定で証明書・ホスト名検証（`ssl.create_default_context()`）。
+  私設 CA 用には `[smtp] cafile` / `capath` を指定できる。cafile は
+  `ssl` が即座に読み込むが、capath はハンドシェイク時の遅延読込のため存在が
+  例外にならない。このため起動時に cafile の存在（ファイル）・capath の存在
+  （ディレクトリ）を明示チェックし、壊れた指定を最初の警報を待たずに検出する。
+  capath のハッシュ済み CA 配置そのものの最終確認は実 TLS 接続時に行われる。
 
 ### 既存ルールのsetとの関係
 
@@ -202,7 +284,7 @@ nft insert rule inet ipsum output ip daddr 192.0.2.10 accept
 ### 運用（systemd）
 
 ```sh
-make install                  # /usr/local/bin/ipsum2nft と /etc/systemd/system/ipsum2nft.{service,timer,boot.timer}
+make install                  # /usr/local/bin/ipsum2nft と /etc/systemd/system/ipsum2nft.{service,timer,boot.timer,notify.service}
 systemctl daemon-reload
 systemctl enable --now ipsum2nft.timer ipsum2nft-boot.timer
 ```
@@ -215,10 +297,17 @@ systemctl enable --now ipsum2nft.timer ipsum2nft-boot.timer
   適用されるため、日次timerとは分離した）。ネットワーク未起動時はダウンロードが
   失敗するが、ツールが前回のローカルコピーで適用するため防御は確保される。
 - **`ipsum2nft.service`**（oneshot、root）: 上記両timerから起動され
-  `--min-score 3 --install --list-dir /var/lib/ipsum2nft
+  `--min-score 3 --install --log-group 6 --list-dir /var/lib/ipsum2nft
   --output /var/lib/ipsum2nft/ipsum.nft` を実行する。
-  オプションを変えたい場合（ルーターで `--chains all`、`--log-group N` 等）は
-  unit の `ExecStart=` を編集して `systemctl daemon-reload`。
+  オプションを変えたい場合（ルーターで `--chains all`、`--log-group` の
+  group 番号変更等）は unit の `ExecStart=` を編集して `systemctl daemon-reload`。
+  `--log-group 6` は既定で付いている（[通知デーモン](#通知デーモンipsum2nft-daemon)が
+  そのまま使えるようにするため）。デーモンを使わない場合も無害（bind なしなら
+  カーネルはログをスキップし、drop はそのまま機能する）。
+- **`ipsum2nft-notify.service`**（optional）: `--log-group` ヒットの通知デーモン。
+  使う場合は `/etc/ipsum2nft.conf` を用意（`ipsum2nft.conf.example` を複製・編集、
+  `chmod 0600`）して `systemctl enable --now ipsum2nft-notify`。
+  `[nflog] group` は `ipsum2nft.service` の `--log-group` と一致させること。
 - 状態（ダウンロード済みフィード、生成ファイル、`.state`）はすべて
   `/var/lib/ipsum2nft` 以下。ディレクトリは `StateDirectory=` により自動作成される。
 - 実行ログは journal: `journalctl -u ipsum2nft`（更新状況の点検にも使う）。
@@ -231,8 +320,10 @@ systemctl enable --now ipsum2nft.timer ipsum2nft-boot.timer
   適用される（遮断範囲はフィードが示す範囲のまま）。
 - 停止/削除（この順番）:
   1. `systemctl disable --now ipsum2nft.timer ipsum2nft-boot.timer`
+     （通知デーモンを使っている場合、`ipsum2nft-notify` も）
   2. `ipsum2nft uninstall --output /var/lib/ipsum2nft/ipsum.nft`（カーネルから外す）
-  3. `make uninstall`（インストール済みファイルのみ削除。2を飛ばすとテーブルが残る）
+  3. `make uninstall`（インストール済みファイルのみ削除。2を飛ばすとテーブルが残る。
+     `/etc/ipsum2nft.conf` は削除対象外なので必要なら手動で）
 
 cron での代替例（systemdを使わない環境）:
 

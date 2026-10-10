@@ -1,0 +1,44 @@
+# ipsum2nft 通知デーモン設定ファイル例
+# /etc/ipsum2nft.conf に配置する（`ipsum2nft daemon` が読む）。
+# SMTP パスワードを直書きするので、ファイルは root:root 0600 を推奨。
+#
+# [nflog] group は `--install` 時の --log-group N と一致させること
+# （同梱の ipsum2nft.service は 6 を使う）。
+# NFLOG グループは 1 つのリーダーしか bind できないため、
+# 同一ホストで lateral-hoihoi（例は group 5）も動かす場合は
+# group 番号を分けて両方を起動すること。
+
+[nflog]
+# nftables 側の `log group N` と一致させる
+group = 6
+# 監視するプロトコルファミリ(inet=IPv4, inet6=IPv6)
+families = inet, inet6
+# 1 パケットあたりコピーするバイト数(ヘッダが取れれば十分。nft の snaplen とどちらか小さい方)
+copy_range = 128
+
+[detection]
+# この秒数ぶんイベントを溜めてから 1 通にまとめて送る(メール洪水対策)
+aggregation_window = 60
+# 同一送信元へは一度通知したらこの秒数は再通知しない(長時間スキャン対策)
+cooldown = 3600
+
+[smtp]
+host = smtp.example.com
+port = 587
+# none | starttls | ssl
+tls = starttls
+# user を空にすると認証なしで送信
+user = alerts@example.com
+password = CHANGE_ME
+# TLS は既定で証明書・ホスト名を検証する。私設 CA の場合は以下を指定:
+# cafile = /etc/pki/my-ca.pem
+# capath = /etc/pki/ca
+timeout = 30
+
+[mail]
+subject_prefix = [ipsum2nft]
+# auto ならこのホストの hostname を使う
+hostname = auto
+from = ipsum2nft@example.com
+# 宛先は複数可(カンマ or 空白区切り)
+to = soc@example.com
