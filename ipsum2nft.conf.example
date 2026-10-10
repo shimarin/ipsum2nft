@@ -6,7 +6,7 @@
 # SMTP パスワードを直書きするので、ファイルは root:root 0600 を推奨。
 
 # 更新コマンドのオプション（コマンドラインの --min-score / --list-dir /
-# --output / --log-group に相当）。行を削除すると既定値になる。
+# --output / --chains / --log-group に相当）。行を削除すると既定値になる。
 [update]
 # 掲載ブラックリスト数が N 以上のIPのみ採用（アップストリーム推奨は 3）
 min_score = 3
@@ -14,6 +14,9 @@ min_score = 3
 list_dir = /var/lib/ipsum2nft
 # 生成される nftables ファイルのパス
 output = /var/lib/ipsum2nft/ipsum.nft
+# 生成するドロップチェーン: both = input+output（ホスト）、
+# all = +forward（ルーター）、または input/output/forward/none
+chains = both
 
 [nflog]
 # nftables 側の `log group N`。更新コマンドが --log-group として読み、

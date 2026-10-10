@@ -49,6 +49,7 @@ FEED_URL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
 SCRIPT_DIR = Path(__file__).resolve().parent
 NETFILTER = shutil.which("nft") or "/usr/bin/nft"
 DEFAULT_CONF = "/etc/ipsum2nft.conf"
+CHAINS_CHOICES = ("both", "all", "input", "output", "forward", "none")
 
 
 def log(msg: str) -> None:
@@ -1356,10 +1357,10 @@ def load_update_config(explicit):
     """Read the update-command options from a config file.
 
     Returns (path, values): values holds only the keys actually present in
-    the file ([update] min_score/list_dir/output, [nflog] group), so the
-    command line (or the built-in defaults) fills in the rest. An absent or
-    unreadable *default* file is not an error (built-in defaults apply); an
-    explicitly requested file must be readable.
+    the file ([update] min_score/list_dir/output/chains, [nflog] group), so
+    the command line (or the built-in defaults) fills in the rest. An absent
+    or unreadable *default* file is not an error (built-in defaults apply);
+    an explicitly requested file must be readable.
     """
     path = explicit or DEFAULT_CONF
     if not explicit and not os.path.isfile(path):
@@ -1384,6 +1385,12 @@ def load_update_config(explicit):
             if not v:
                 raise SystemExit("config error [update] %s: empty" % opt)
             values[opt] = Path(v)
+    if parser.has_option("update", "chains"):
+        v = parser.get("update", "chains").strip()
+        if v not in CHAINS_CHOICES:
+            raise SystemExit("config error [update] chains: %r (choose from %s)"
+                             % (v, "/".join(CHAINS_CHOICES)))
+        values["chains"] = v
     if parser.has_option("nflog", "group"):
         try:
             v = parser.getint("nflog", "group")
@@ -1519,9 +1526,9 @@ def main() -> None:
                     help="merge adjacent/overlapping prefixes (e.g. 256 x /32 -> /24)")
     ap.add_argument("--table", default="ipsum", help="nftables table name")
     ap.add_argument("--set", default="blocklist", help="nftables set name")
-    ap.add_argument("--chains", default="both",
-                    choices=["both", "all", "input", "output", "forward", "none"],
-                    help="drop chains to generate (all = input+output+forward, for routers)")
+    ap.add_argument("--chains", default=None, choices=list(CHAINS_CHOICES),
+                    help="drop chains to generate (all = input+output+forward, for routers; "
+                         "default: both, or [update] chains in the config file)")
     ap.add_argument("--output", type=Path, default=None,
                     help="output file (chunk files are written next to it; "
                          "default: %s, or [update] output in the config file)"
@@ -1559,7 +1566,7 @@ def main() -> None:
     conf_path, conf = load_update_config(args.config)
     if conf_path is not None:
         log(f"[config] reading {conf_path}")
-    for key in ("min_score", "list_dir", "output", "log_group"):
+    for key in ("min_score", "list_dir", "output", "log_group", "chains"):
         if getattr(args, key) is None and key in conf:
             setattr(args, key, conf[key])
     if args.log and "log_group" in conf:
@@ -1571,6 +1578,8 @@ def main() -> None:
         args.list_dir = SCRIPT_DIR / "ipsum"
     if args.output is None:
         args.output = SCRIPT_DIR / "ipsum.nft"
+    if args.chains is None:
+        args.chains = "both"
 
     log_rate = _normalize_log_rate(args.log_rate)
     if log_rate is None:

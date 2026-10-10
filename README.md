@@ -31,14 +31,14 @@ HTTPSでダウンロード（git依存なし、約1.9MB）し、`nft -f` でロ�
 
 | オプション | 説明 |
 |---|---|
-| `-c FILE` | 設定ファイル（既定: 存在する場合は `/etc/ipsum2nft.conf`）。`[update] min_score/list_dir/output` と `[nflog] group` を読み込む |
+| `-c FILE` | 設定ファイル（既定: 存在する場合は `/etc/ipsum2nft.conf`）。`[update] min_score/list_dir/output/chains` と `[nflog] group` を読み込む |
 | `--min-score N` | 掲載ブラックリスト数が N 以上のIPのみ採用（既定: 1 = 全件、または設定ファイルの `[update] min_score`）。`levels/N.txt` と同等の絞り込み |
 | `--add IP` | 追加でセットに含めるIP/CIDR（繰り返し指定・カンマ区切り可）。`--min-score`の対象外。`--merge`併用時は隣接エントリと統合される。実測で特定のIPのブロックを確認したい場合に便利 |
 | `--log` | アウトバウンドヒット（output daddr / forward daddr）をレート制限付きでカーネルログ(journald)に記録 |
 | `--log-group N` | 同アウトバウンドヒットをNFLOGグループNに送出（既定: 設定ファイルの `[nflog] group`、無ければ NFLOG ルールなし。同梱の `daemon` サブコマンド、または lateral-hoihoi 等のユーザースペースリーダーでMAC/uid付き記録＋メール警報。負荷時の完全記録は保証しない） |
 | `--log-rate RATE` | `--log` のレート制限（既定 `10/minute`）。`N/second\|minute\|hour\|day\|week` の正の整数 N を要求し正規化する（nft は `sec` の短縮形や単位なしを拒否し、先頭ゼロは8進数と解釈するため `010/minute` は `10/minute` に正規化される） |
 | `--merge` | 隣接・重複するprefixを統合（256個の/32 → /24 等）。本リストは118,773 → 約90,000件に圧縮 |
-| `--chains {both,all,input,output,forward,none}` | 生成するドロップチェーン（既定: both = input+output）。ルーターでは `all`（+forward）。`none` でセットのみ |
+| `--chains {both,all,input,output,forward,none}` | 生成するドロップチェーン（既定: both = input+output、または設定ファイルの `[update] chains`）。ルーターでは `all`（+forward）。`none` でセットのみ |
 | `--table` / `--set` | テーブル名（既定: `ipsum`）/ セット名（既定: `blocklist`）。**名前を変更すると旧テーブルは削除されない**ので、旧名で `uninstall --table <旧名>` を実行すること |
 | `--output FILE` | 出力先（既定: `ipsum.nft`、または設定ファイルの `[update] output`） |
 | `--chunk N` | 要素を追加N件ごとにファイル分割（既定: 0 = 単一ファイル） |
@@ -157,6 +157,8 @@ ipsum2nft daemon --test-mail        # 設定でテストメールを1通送っ�
 min_score = 3
 list_dir = /var/lib/ipsum2nft
 output = /var/lib/ipsum2nft/ipsum.nft
+# ルーターでは all（+forward）
+chains = both
 
 [nflog]
 group = 6
@@ -327,10 +329,11 @@ systemctl enable --now ipsum2nft.timer ipsum2nft-boot.timer
   `--install` のみを実行する。それ以外のオプション（`--min-score 3`、
   `--list-dir /var/lib/ipsum2nft`、`--output /var/lib/ipsum2nft/ipsum.nft`、
   `--log-group 6` に相当するもの）は `/etc/ipsum2nft.conf`
-  （`[update] min_score/list_dir/output`、`[nflog] group`）から読む。
-  オプションを変えたい場合（ルーターで `--chains all`、group 番号変更等）は
-  **設定ファイルを編集すればよく、ドロップインは不要**（コマンドラインに
-  引数を足す場合は unit を編集し、その場合はファイルより優先される）。
+  （`[update] min_score/list_dir/output/chains`、`[nflog] group`）から読む。
+  オプションを変えたい場合（**ルーターでは `[update] chains = all`**、
+  group 番号変更等）は **設定ファイルを編集すればよく、ドロップインは不要**
+  （コマンドラインに引数を足す場合は unit を編集し、その場合はファイルより
+  優先される）。
   `--log-group` は `[nflog] group = 6` として既定で付いている
   （[通知デーモン](#通知デーモンipsum2nft-daemon)がそのまま使えるようにするため。
   デーモンを使わない場合も無害: bind なしならカーネルはログをスキップし、

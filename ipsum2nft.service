@@ -6,8 +6,9 @@ After=network-online.target nftables.service
 [Service]
 Type=oneshot
 # Only --install is given here; all other options come from
-# /etc/ipsum2nft.conf ([update] min_score/list_dir/output, [nflog] group),
-# which is created by `make install` from ipsum2nft.conf.example. To
+# /etc/ipsum2nft.conf ([update] min_score/list_dir/output/chains,
+# [nflog] group), which is created by `make install` from
+# ipsum2nft.conf.example. To
 # customize, edit the file (no drop-in needed); the command line always
 # wins over it. Keep the binary path in sync with BINDIR in the Makefile.
 # [nflog] group 6: outbound hits are sent to NFLOG group 6, read by
