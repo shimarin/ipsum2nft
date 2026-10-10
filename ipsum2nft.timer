@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily update of the IPsum nftables blocklist
+
+[Timer]
+# The feed is updated daily around 03:00 UTC+2 (UTC+3 in summer, i.e.
+# 01:00/00:00 UTC); 04:00 UTC leaves margin for either offset.
+OnCalendar=*-*-* 04:00:00 UTC
+RandomizedDelaySec=15min
+# If the machine was off at the scheduled time, run once after boot.
+# (Reboot re-application is handled by ipsum2nft-boot.timer without
+# RandomizedDelaySec, so protection comes back as soon as possible.)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

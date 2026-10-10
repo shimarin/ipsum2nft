@@ -1,0 +1,6 @@
+ipsum/
+*.nft
+*.nft.state
+*.nft.state.upd
+*.tmp
+__pycache__/

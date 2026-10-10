@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-apply the IPsum nftables blocklist after boot
+
+[Timer]
+# The kernel table does not survive a reboot. No RandomizedDelaySec here:
+# unlike the daily timer, protection should come back as soon as possible
+# after boot. Uses the cached feed; if the network is not up yet the tool
+# falls back to the last local copy.
+Unit=ipsum2nft.service
+OnBootSec=10min
+
+[Install]
+WantedBy=timers.target

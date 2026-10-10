@@ -1,0 +1,23 @@
+[Unit]
+Description=Install the IPsum blocklist into nftables (download + load)
+Wants=network-online.target
+After=network-online.target nftables.service
+
+[Service]
+Type=oneshot
+# Adjust the options here (or via a drop-in). Keep the binary path in sync
+# with BINDIR in the Makefile.
+ExecStart=/usr/local/bin/ipsum2nft --min-score 3 --install \
+    --list-dir /var/lib/ipsum2nft \
+    --output /var/lib/ipsum2nft/ipsum.nft
+StateDirectory=ipsum2nft
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
