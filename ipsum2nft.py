@@ -18,8 +18,9 @@ Examples:
   ./ipsum2nft.py --chains all --install # router: also block transit (forward) traffic
    ./ipsum2nft.py --add 203.0.113.7      # also block a test IP not in the feed
    ./ipsum2nft.py uninstall              # remove the table from the kernel (root)
-   ./ipsum2nft.py daemon                 # NFLOG hit notification daemon (mail alerts)
+    ./ipsum2nft.py daemon                 # NFLOG hit notification daemon (mail alerts)
 """
+from __future__ import annotations
 
 import argparse
 import configparser
