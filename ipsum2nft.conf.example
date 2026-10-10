@@ -1,15 +1,26 @@
-# ipsum2nft 通知デーモン設定ファイル例
-# /etc/ipsum2nft.conf に配置する（`ipsum2nft daemon` が読む）。
+# ipsum2nft 設定ファイル例
+# /etc/ipsum2nft.conf に配置する（`make install` が存在しなければコピーする）。
+# 更新コマンド（ipsum2nft / ipsum2nft.service）と通知デーモン（ipsum2nft daemon）
+# の両方が読む。コマンドラインオプション（-c で別ファイル指定可）と重なった
+# 場合はコマンドラインが優先される。
 # SMTP パスワードを直書きするので、ファイルは root:root 0600 を推奨。
-#
-# [nflog] group は `--install` 時の --log-group N と一致させること
-# （同梱の ipsum2nft.service は 6 を使う）。
+
+# 更新コマンドのオプション（コマンドラインの --min-score / --list-dir /
+# --output / --log-group に相当）。行を削除すると既定値になる。
+[update]
+# 掲載ブラックリスト数が N 以上のIPのみ採用（アップストリーム推奨は 3）
+min_score = 3
+# ダウンロードしたフィードを置くディレクトリ
+list_dir = /var/lib/ipsum2nft
+# 生成される nftables ファイルのパス
+output = /var/lib/ipsum2nft/ipsum.nft
+
+[nflog]
+# nftables 側の `log group N`。更新コマンドが --log-group として読み、
+# 通知デーモンがこのグループを bind する（両者はこの 1 行で整合する）。
 # NFLOG グループは 1 つのリーダーしか bind できないため、
 # 同一ホストで lateral-hoihoi（例は group 5）も動かす場合は
 # group 番号を分けて両方を起動すること。
-
-[nflog]
-# nftables 側の `log group N` と一致させる
 group = 6
 # 監視するプロトコルファミリ(inet=IPv4, inet6=IPv6)
 families = inet, inet6

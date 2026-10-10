@@ -5,20 +5,20 @@ After=network-online.target nftables.service
 
 [Service]
 Type=oneshot
-# Adjust the options here (or via a drop-in). Keep the binary path in sync
-# with BINDIR in the Makefile.
-# --log-group 6: send outbound hits to NFLOG group 6, read by
-# ipsum2nft-notify.service ([nflog] group in /etc/ipsum2nft.conf must match).
-# Harmless if the notify daemon is not running: with no reader bound to the
-# group the kernel simply skips the log and the drop still applies.
-# Preconditions for that: nothing else in this network namespace uses NFLOG
-# group 6 (an unrelated reader would start receiving these events), and the
-# nfnetlink_log kernel support is available (built-in or loadable; the nft
-# 'log group' statement needs it).
-ExecStart=/usr/local/bin/ipsum2nft --min-score 3 --install \
-    --list-dir /var/lib/ipsum2nft \
-    --output /var/lib/ipsum2nft/ipsum.nft \
-    --log-group 6
+# Only --install is given here; all other options come from
+# /etc/ipsum2nft.conf ([update] min_score/list_dir/output, [nflog] group),
+# which is created by `make install` from ipsum2nft.conf.example. To
+# customize, edit the file (no drop-in needed); the command line always
+# wins over it. Keep the binary path in sync with BINDIR in the Makefile.
+# [nflog] group 6: outbound hits are sent to NFLOG group 6, read by
+# ipsum2nft-notify.service (it binds the same [nflog] group, so the two
+# stay consistent by construction). Harmless if the notify daemon is not
+# running: with no reader bound to the group the kernel simply skips the
+# log and the drop still applies. Preconditions: nothing else in this
+# network namespace uses the group (an unrelated reader would start
+# receiving these events), and the nfnetlink_log kernel support is
+# available (built-in or loadable; the nft 'log group' statement needs it).
+ExecStart=/usr/local/bin/ipsum2nft --install
 StateDirectory=ipsum2nft
 NoNewPrivileges=yes
 ProtectSystem=strict

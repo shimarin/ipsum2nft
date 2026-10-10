@@ -1,7 +1,8 @@
 [Unit]
 Description=ipsum2nft blocklist-hit notification daemon (NFLOG group 6 -> mail)
-# Only needed when ipsum2nft.service runs with --log-group; the group number
-# in /etc/ipsum2nft.conf ([nflog] group) must match it.
+# Only needed when the nft rules log to an NFLOG group ([nflog] group in
+# /etc/ipsum2nft.conf, which the update command reads as --log-group, so
+# both sides stay consistent by construction).
 After=network-online.target nftables.service
 Wants=network-online.target
 

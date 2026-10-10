@@ -48,6 +48,7 @@ from pathlib import Path
 FEED_URL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
 SCRIPT_DIR = Path(__file__).resolve().parent
 NETFILTER = shutil.which("nft") or "/usr/bin/nft"
+DEFAULT_CONF = "/etc/ipsum2nft.conf"
 
 
 def log(msg: str) -> None:
@@ -1351,12 +1352,55 @@ def validate_for_mail(c):
         raise SystemExit("config incomplete: " + ", ".join(missing))
 
 
+def load_update_config(explicit):
+    """Read the update-command options from a config file.
+
+    Returns (path, values): values holds only the keys actually present in
+    the file ([update] min_score/list_dir/output, [nflog] group), so the
+    command line (or the built-in defaults) fills in the rest. An absent or
+    unreadable *default* file is not an error (built-in defaults apply); an
+    explicitly requested file must be readable.
+    """
+    path = explicit or DEFAULT_CONF
+    if not explicit and not os.path.isfile(path):
+        return None, {}
+    parser = configparser.ConfigParser(interpolation=None)
+    if not parser.read(path, encoding="utf-8"):
+        if explicit:
+            raise SystemExit("cannot read config file: %s" % path)
+        return None, {}
+    values = {}
+    if parser.has_option("update", "min_score"):
+        try:
+            v = parser.getint("update", "min_score")
+        except ValueError as e:
+            raise SystemExit("config error [update] min_score: %s" % e)
+        if v < 1:
+            raise SystemExit("config error [update] min_score: %d (must be >= 1)" % v)
+        values["min_score"] = v
+    for opt in ("list_dir", "output"):
+        if parser.has_option("update", opt):
+            v = parser.get("update", opt).strip()
+            if not v:
+                raise SystemExit("config error [update] %s: empty" % opt)
+            values[opt] = Path(v)
+    if parser.has_option("nflog", "group"):
+        try:
+            v = parser.getint("nflog", "group")
+        except ValueError as e:
+            raise SystemExit("config error [nflog] group: %s" % e)
+        if not (0 <= v <= 65535):
+            raise SystemExit("config error [nflog] group: %d (must be in 0..65535)" % v)
+        values["log_group"] = v
+    return path, values
+
+
 def run_daemon(args) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s")
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config or DEFAULT_CONF)
     cfg.dump = args.dump
 
     if args.test_mail:
@@ -1438,9 +1482,13 @@ def main() -> None:
                     help="output file whose .state sidecar will be removed "
                          "(default: %(default)s)")
     dp = sub.add_parser("daemon", help="NFLOG notification daemon: aggregate hits "
-                                       "sent by --log-group and mail an alert")
-    dp.add_argument("-c", "--config", default="/etc/ipsum2nft.conf",
-                    help="config file (see ipsum2nft.conf.example; default: %(default)s)")
+                                        "sent by --log-group and mail an alert")
+    # default=SUPPRESS: when not given on the daemon line, keep the value
+    # parsed by the top-level -c (so 'ipsum2nft -c X daemon' works too);
+    # run_daemon resolves a missing value to DEFAULT_CONF.
+    dp.add_argument("-c", "--config", default=argparse.SUPPRESS, metavar="FILE",
+                    help="config file (see ipsum2nft.conf.example; default: %s)"
+                         % DEFAULT_CONF)
     dpmode = dp.add_mutually_exclusive_group()
     dpmode.add_argument("--dump", action="store_true",
                         help="print the alerts to stdout instead of sending mail (testing)")
@@ -1448,17 +1496,22 @@ def main() -> None:
                         help="send one test mail with the configured SMTP settings, "
                              "then exit (non-zero exit on a failed send)")
     dp.add_argument("-v", "--verbose", action="store_true")
-    ap.add_argument("--list-dir", type=Path, default=SCRIPT_DIR / "ipsum",
+    ap.add_argument("-c", "--config", default=None, metavar="FILE",
+                    help="config file for --min-score/--list-dir/--output/--log-group "
+                         "(default: %s when present; the command line wins)" % DEFAULT_CONF)
+    ap.add_argument("--list-dir", type=Path, default=None,
                     help="directory where the downloaded feed is kept "
-                         "(default: %(default)s)")
+                         "(default: %s, or [update] list_dir in the config file)"
+                         % (SCRIPT_DIR / "ipsum",))
     ap.add_argument("--url", default=FEED_URL, metavar="URL",
                     help="feed URL to download (default: %(default)s)")
     ap.add_argument("--list", type=Path, default=None, metavar="FILE",
                     help="parse FILE instead of downloading the feed")
     ap.add_argument("--no-fetch", action="store_true",
                     help="do not download the feed; use the last local copy")
-    ap.add_argument("--min-score", type=int, default=1, metavar="N",
-                    help="only include IPs listed on >= N blacklists (upstream recommends 3)")
+    ap.add_argument("--min-score", type=int, default=None, metavar="N",
+                    help="only include IPs listed on >= N blacklists (upstream recommends 3; "
+                         "default: 1, or [update] min_score in the config file)")
     ap.add_argument("--add", action="append", default=[], metavar="IP",
                     help="extra IP or CIDR to always include (repeatable, comma-separated OK); "
                          "not subject to --min-score, merged when --merge is used")
@@ -1469,8 +1522,10 @@ def main() -> None:
     ap.add_argument("--chains", default="both",
                     choices=["both", "all", "input", "output", "forward", "none"],
                     help="drop chains to generate (all = input+output+forward, for routers)")
-    ap.add_argument("--output", type=Path, default=SCRIPT_DIR / "ipsum.nft",
-                    help="output file (chunk files are written next to it)")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="output file (chunk files are written next to it; "
+                         "default: %s, or [update] output in the config file)"
+                         % (SCRIPT_DIR / "ipsum.nft",))
     ap.add_argument("--chunk", type=int, default=0, metavar="N",
                     help="split element adds into N-element files (0 = single file)")
     loggrp = ap.add_mutually_exclusive_group()
@@ -1480,7 +1535,8 @@ def main() -> None:
     loggrp.add_argument("--log-group", type=int, default=None, metavar="N",
                         help="send outbound hits to NFLOG group N for a userspace reader "
                              "(the 'daemon' subcommand of this tool, or lateral-hoihoi: "
-                             "full record incl. src/dst MAC)")
+                             "full record incl. src/dst MAC; default: "
+                             "[nflog] group in the config file, i.e. no NFLOG rule)")
     ap.add_argument("--log-rate", default="10/minute", metavar="RATE",
                      help="rate limit for --log: positive integer + unit "
                           "(second|minute|hour|day|week), default: %(default)s")
@@ -1496,6 +1552,25 @@ def main() -> None:
         state = args.output.parent / (args.output.name + ".state")
         uninstall(args.table, state)
         return
+
+    # Config file for the update options (see ipsum2nft.conf.example): the
+    # command line wins over the file, the file wins over the built-in
+    # defaults. A missing/unreadable default file just means built-ins.
+    conf_path, conf = load_update_config(args.config)
+    if conf_path is not None:
+        log(f"[config] reading {conf_path}")
+    for key in ("min_score", "list_dir", "output", "log_group"):
+        if getattr(args, key) is None and key in conf:
+            setattr(args, key, conf[key])
+    if args.log and "log_group" in conf:
+        log(f"[config] note: --log (kernel log) overrides [nflog] group "
+            f"{conf['log_group']} from {conf_path}")
+    if args.min_score is None:
+        args.min_score = 1
+    if args.list_dir is None:
+        args.list_dir = SCRIPT_DIR / "ipsum"
+    if args.output is None:
+        args.output = SCRIPT_DIR / "ipsum.nft"
 
     log_rate = _normalize_log_rate(args.log_rate)
     if log_rate is None:
